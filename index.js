@@ -1,10 +1,11 @@
 // index.js
-// Help Hub Order API — with tracking info
-// Expects env:
-//   SHOP=ledspace-lighting.myshopify.com   (or your real shop)
-//   ADMIN_TOKEN=shpat_...                  (Admin API access token with read_orders, read_products)
+// Help Hub Order API — orders + products + tracking
+//
+// ENV NEEDED:
+//   SHOP=ledspace-lighting.myshopify.com   (or your actual shop domain, no https://)
+//   ADMIN_TOKEN=shpat_...                  (Admin API token with read_orders, read_products, read_fulfillments)
 //   ADMIN_VERSION=2024-10                  (optional)
-//   ALLOWED_ORIGIN=https://www.ledspace.co.uk,https://ledspace.co.uk,...  (comma separated)
+//   ALLOWED_ORIGIN=https://www.ledspace.co.uk,https://ledspace.co.uk,https://ledspace-lighting.myshopify.com
 
 const express = require('express');
 
@@ -16,16 +17,34 @@ const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 const ADMIN_VERSION = process.env.ADMIN_VERSION || '2024-10';
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || '';
 
-const ALLOWED_ORIGINS = ALLOWED_ORIGIN
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
+const DEFAULT_ALLOWED = [
+  'https://www.ledspace.co.uk',
+  'https://ledspace.co.uk',
+  'https://ledspace-lighting.myshopify.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+];
+
+const ALLOWED_ORIGINS = [
+  ...new Set(
+    ALLOWED_ORIGIN
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .concat(DEFAULT_ALLOWED)
+  ),
+];
 
 app.use(express.json());
 
-// CORS – only allow your shop(s)
+// CORS middleware — always run this first
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+  // log origin so we can see what the browser is actually sending
+  if (origin) {
+    console.log('Incoming Origin:', origin);
+  }
+
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
@@ -34,6 +53,7 @@ app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
 
   if (req.method === 'OPTIONS') {
+    // preflight OK
     return res.status(200).end();
   }
 
@@ -54,12 +74,13 @@ async function shopifyAdminFetch(path, opts = {}) {
     headers: {
       'X-Shopify-Access-Token': ADMIN_TOKEN,
       'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      Accept: 'application/json',
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
+    console.error('Shopify Admin error', res.status, json);
     const msg = json && json.errors ? JSON.stringify(json.errors) : res.statusText;
     const err = new Error('Shopify Admin error: ' + msg);
     err.status = res.status;
@@ -68,12 +89,22 @@ async function shopifyAdminFetch(path, opts = {}) {
   return json;
 }
 
+// health
 app.get('/', (req, res) => {
-  console.log('Health check hit');
   res.send('Help Hub Order API');
 });
 
-// POST /order-lookup  { orderCode, postcode }
+// small debug route so you can see allowed origins in browser
+app.get('/debug/origins', (req, res) => {
+  res.json({
+    ok: true,
+    allowed: ALLOWED_ORIGINS,
+    shop: SHOP,
+    version: ADMIN_VERSION,
+  });
+});
+
+// main route
 app.post('/order-lookup', async (req, res) => {
   try {
     const { orderCode, postcode } = req.body || {};
@@ -83,20 +114,17 @@ app.post('/order-lookup', async (req, res) => {
 
     const targetPostcode = normalisePostcode(postcode);
 
-    // We’ll try to find the order by name (that’s what you’re typing: LS74193)
-    // This hits the orders endpoint and filters by name.
-    // status=any so it also finds fulfilled / archived orders.
+    // find by name
     const orderList = await shopifyAdminFetch(
       `/orders.json?status=any&name=${encodeURIComponent(orderCode)}`
     );
 
     const orders = Array.isArray(orderList.orders) ? orderList.orders : [];
-
     if (!orders.length) {
       return res.status(404).json({ ok: false, error: 'Order not found' });
     }
 
-    // Find the one whose shipping/billing postcode matches
+    // pick order with matching postcode
     let matched = null;
     for (const o of orders) {
       const shipPc = o.shipping_address ? normalisePostcode(o.shipping_address.zip) : '';
@@ -110,22 +138,24 @@ app.post('/order-lookup', async (req, res) => {
         break;
       }
     }
-
     const order = matched || orders[0];
 
-    // Build tracking info from fulfillments
+    // tracking from fulfillments
     const tracking = [];
     if (Array.isArray(order.fulfillments) && order.fulfillments.length) {
       for (const f of order.fulfillments) {
         const numbers =
-          (Array.isArray(f.tracking_numbers) && f.tracking_numbers.length)
+          Array.isArray(f.tracking_numbers) && f.tracking_numbers.length
             ? f.tracking_numbers
-            : (f.tracking_number ? [f.tracking_number] : []);
+            : f.tracking_number
+            ? [f.tracking_number]
+            : [];
         const urls =
-          (Array.isArray(f.tracking_urls) && f.tracking_urls.length)
+          Array.isArray(f.tracking_urls) && f.tracking_urls.length
             ? f.tracking_urls
-            : (f.tracking_url ? [f.tracking_url] : []);
-
+            : f.tracking_url
+            ? [f.tracking_url]
+            : [];
         const company = f.tracking_company || f.shipping_company || null;
 
         if (numbers.length) {
@@ -133,29 +163,24 @@ app.post('/order-lookup', async (req, res) => {
             tracking.push({
               number: num,
               url: urls[idx] || urls[0] || null,
-              company: company,
+              company,
             });
           });
-        } else {
-          // no tracking number, but maybe a URL
-          if (urls.length) {
-            tracking.push({
-              number: null,
-              url: urls[0],
-              company: company,
-            });
-          }
+        } else if (urls.length) {
+          tracking.push({
+            number: null,
+            url: urls[0],
+            company,
+          });
         }
       }
     }
 
-    // Now gather the products on the order
+    // collect products from line items
     const lineItems = Array.isArray(order.line_items) ? order.line_items : [];
-    const productIds = [...new Set(lineItems.map(li => li.product_id).filter(Boolean))];
+    const productIds = [...new Set(lineItems.map((li) => li.product_id).filter(Boolean))];
 
     const productsById = {};
-
-    // fetch each product to get the handle + image
     for (const pid of productIds) {
       try {
         const pjson = await shopifyAdminFetch(`/products/${pid}.json`);
@@ -163,19 +188,15 @@ app.post('/order-lookup', async (req, res) => {
           productsById[pid] = pjson.product;
         }
       } catch (e) {
-        // non-fatal — product might have been deleted
         console.warn('Failed to load product', pid, e.message);
       }
     }
 
-    // Build items we return to the browser
-    const items = lineItems.map(li => {
+    const items = lineItems.map((li) => {
       const p = li.product_id ? productsById[li.product_id] : null;
       const handle = p ? p.handle : null;
       const image =
-        p && Array.isArray(p.images) && p.images.length
-          ? p.images[0].src
-          : null;
+        p && Array.isArray(p.images) && p.images.length ? p.images[0].src : null;
 
       const skus = [];
       if (li.sku) skus.push(li.sku);
@@ -192,14 +213,15 @@ app.post('/order-lookup', async (req, res) => {
       ok: true,
       order: {
         id: order.id,
-        name: order.name,               // e.g. LS74193 or #1234
-        orderNumber: order.order_number,// numeric
-        tracking: tracking,             // array we just built
+        name: order.name,
+        orderNumber: order.order_number,
+        tracking,
       },
-      items: items,
+      items,
     });
   } catch (err) {
-    console.error('Order lookup error:', err.message);
+    console.error('Order lookup error:', err);
+    // IMPORTANT: still return JSON so the browser .json() doesn’t crash
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 });
