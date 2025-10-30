@@ -1,40 +1,41 @@
 // index.js
-// Super-simple version: CORS first, order lookup, tracking
+// Help Hub Order API — Express + Axios (safe for Heroku)
 
 const express = require('express');
-const app = express();
+const axios = require('axios');
 
+const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ENV you MUST set in Heroku:
-// SHOP=ledspace-lighting.myshopify.com   (NO https://, NO trailing /)
-// ADMIN_TOKEN=shpat_....                 (Admin API token with read_orders, read_products, read_fulfillments)
+// ENV you MUST set on Heroku:
+//
+// SHOP=ledspace-lighting.myshopify.com      // no https://, no trailing /
+// ADMIN_TOKEN=shpat_...                     // Admin token with read_orders, read_products, read_fulfillments
 // ALLOWED_ORIGIN=https://www.ledspace.co.uk,https://ledspace.co.uk,https://ledspace-lighting.myshopify.com
-// ADMIN_VERSION=2024-10   (optional, defaults below)
+// ADMIN_VERSION=2024-10                     // optional
 
 const SHOP = process.env.SHOP;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN;
 const ADMIN_VERSION = process.env.ADMIN_VERSION || '2024-10';
 
-// if you forget ALLOWED_ORIGIN, we fall back to these:
 const FALLBACK_ORIGINS = [
   'https://www.ledspace.co.uk',
   'https://ledspace.co.uk',
   'https://ledspace-lighting.myshopify.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
 ];
 
 const ALLOWED_ORIGIN_ENV = process.env.ALLOWED_ORIGIN || '';
 const ALLOWED_ORIGINS = ALLOWED_ORIGIN_ENV
-  ? ALLOWED_ORIGIN_ENV.split(',').map((s) => s.trim()).filter(Boolean)
+  ? ALLOWED_ORIGIN_ENV.split(',').map(s => s.trim()).filter(Boolean)
   : FALLBACK_ORIGINS;
 
-// 1) BASIC MIDDLEWARE
 app.use(express.json());
 
-// 2) CORS — ALWAYS run this
+// CORS — run before everything else
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  // log so we can see what the browser actually sends
   console.log('Incoming Origin:', origin);
 
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -51,57 +52,42 @@ app.use((req, res, next) => {
   next();
 });
 
-// small helper
 function normalisePostcode(pc) {
   return String(pc || '').toUpperCase().replace(/\s+/g, '').trim();
 }
 
-// very small fetch wrapper to Shopify Admin
-async function shopifyAdminFetch(path, opts = {}) {
+// Simple Shopify Admin call using Axios
+async function shopifyAdminGet(path) {
   if (!SHOP || !ADMIN_TOKEN) {
     throw new Error('SHOP or ADMIN_TOKEN not configured');
   }
-
   const url = `https://${SHOP}/admin/api/${ADMIN_VERSION}${path}`;
-  const res = await fetch(url, {
-    method: opts.method || 'GET',
+  const resp = await axios.get(url, {
     headers: {
       'X-Shopify-Access-Token': ADMIN_TOKEN,
       'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
+      'Accept': 'application/json'
+    }
   });
-
-  const json = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    console.error('Shopify Admin error', res.status, json);
-    const msg = json && json.errors ? JSON.stringify(json.errors) : res.statusText;
-    const err = new Error('Shopify Admin error: ' + msg);
-    err.status = res.status;
-    throw err;
-  }
-
-  return json;
+  return resp.data;
 }
 
-// health route
+// health
 app.get('/', (req, res) => {
   res.send('Help Hub Order API is up');
 });
 
-// debug route so you can check CORS
+// debug — so you can test CORS from the browser
 app.get('/debug/origins', (req, res) => {
   res.json({
     ok: true,
     allowed: ALLOWED_ORIGINS,
     shop: SHOP,
-    version: ADMIN_VERSION,
+    version: ADMIN_VERSION
   });
 });
 
-// MAIN: POST /order-lookup
+// main: POST /order-lookup
 app.post('/order-lookup', async (req, res) => {
   try {
     const { orderCode, postcode } = req.body || {};
@@ -111,17 +97,15 @@ app.post('/order-lookup', async (req, res) => {
 
     const targetPc = normalisePostcode(postcode);
 
-    // 1) get order(s) by name
-    const list = await shopifyAdminFetch(
-      `/orders.json?status=any&name=${encodeURIComponent(orderCode)}`
-    );
+    // 1) find order(s) by name
+    const list = await shopifyAdminGet(`/orders.json?status=any&name=${encodeURIComponent(orderCode)}`);
     const orders = Array.isArray(list.orders) ? list.orders : [];
 
     if (!orders.length) {
       return res.status(404).json({ ok: false, error: 'Order not found' });
     }
 
-    // 2) match postcode
+    // 2) pick the one matching postcode (shipping or billing)
     let order = null;
     for (const o of orders) {
       const shipPc = o.shipping_address ? normalisePostcode(o.shipping_address.zip) : '';
@@ -139,7 +123,7 @@ app.post('/order-lookup', async (req, res) => {
       order = orders[0];
     }
 
-    // 3) build tracking
+    // 3) tracking from fulfillments
     const tracking = [];
     if (Array.isArray(order.fulfillments)) {
       for (const f of order.fulfillments) {
@@ -156,32 +140,33 @@ app.post('/order-lookup', async (req, res) => {
             tracking.push({
               number: num,
               url: urls[idx] || urls[0] || null,
-              company,
+              company
             });
           });
         } else if (urls.length) {
           tracking.push({
             number: null,
             url: urls[0],
-            company,
+            company
           });
         }
       }
     }
 
-    // 4) get products for line items
+    // 4) gather products for line items
     const lineItems = Array.isArray(order.line_items) ? order.line_items : [];
     const productIds = [...new Set(lineItems.map(li => li.product_id).filter(Boolean))];
 
     const productsById = {};
+
     for (const pid of productIds) {
       try {
-        const pj = await shopifyAdminFetch(`/products/${pid}.json`);
-        if (pj && pj.product) {
-          productsById[pid] = pj.product;
+        const pdata = await shopifyAdminGet(`/products/${pid}.json`);
+        if (pdata && pdata.product) {
+          productsById[pid] = pdata.product;
         }
       } catch (e) {
-        console.warn('Could not fetch product', pid, e.message);
+        console.warn('Could not load product', pid, e.message);
       }
     }
 
@@ -191,7 +176,7 @@ app.post('/order-lookup', async (req, res) => {
         title: p ? p.title : li.title,
         handle: p ? p.handle : null,
         image: (p && Array.isArray(p.images) && p.images.length) ? p.images[0].src : null,
-        skus: li.sku ? [li.sku] : [],
+        skus: li.sku ? [li.sku] : []
       };
     });
 
@@ -201,12 +186,13 @@ app.post('/order-lookup', async (req, res) => {
         id: order.id,
         name: order.name,
         orderNumber: order.order_number,
-        tracking,
+        tracking
       },
-      items,
+      items
     });
   } catch (err) {
     console.error('Order lookup error:', err.message);
+    // still return JSON so browser .json() works
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 });
