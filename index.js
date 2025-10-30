@@ -5,21 +5,21 @@ import fetch from "node-fetch";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ─── ENV (from Heroku) ─────────────────────────────────────────────
+// ─── ENV from Heroku ─────────────────────────────────────────────
 const SHOP = process.env.SHOP; // e.g. "ledspace-lighting.myshopify.com"
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN; // shpat_...
 const ADMIN_VERSION = process.env.ADMIN_VERSION || "2024-10";
 // ALLOWED_ORIGIN can be comma-separated, e.g.
 // "https://www.ledspace.co.uk,https://ledspace-lighting.myshopify.com"
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
-// ───────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
 
 // turn "a,b,c " → ["a","b","c"]
 const allowedOrigins = ALLOWED_ORIGIN
   ? ALLOWED_ORIGIN.split(",").map((o) => o.trim().replace(/\/$/, ""))
   : [];
 
-// this is just so we can see in Heroku logs what the app thinks is OK
+// log what we’ve actually got, so we can see it in Heroku logs
 console.log("Help Hub API starting…");
 console.log("SHOP:", SHOP);
 console.log("ADMIN_VERSION:", ADMIN_VERSION);
@@ -31,7 +31,7 @@ app.use(express.json());
 app.use(
   cors({
     origin: function (origin, cb) {
-      // If you didn't set ALLOWED_ORIGIN at all → allow everything (easier for local tests)
+      // If ALLOWED_ORIGIN not set at all → allow everything (handy for tests)
       if (!ALLOWED_ORIGIN) {
         console.log("CORS: no ALLOWED_ORIGIN set → allow all");
         return cb(null, true);
@@ -55,12 +55,12 @@ app.use(
   })
 );
 
-// simple health check
+// health check
 app.get("/", (req, res) => {
   res.json({ ok: true, msg: "Help Hub Order API is running" });
 });
 
-// main handler
+// main endpoint
 app.post("/order-lookup", async (req, res) => {
   try {
     const { orderCode, postcode } = req.body || {};
@@ -124,7 +124,7 @@ app.post("/order-lookup", async (req, res) => {
 
     const orders = data?.orders?.edges?.map((e) => e.node) || [];
 
-    // find the order whose postcode matches (shipping OR billing)
+    // match on postcode (shipping or billing), normalised
     const match = orders.find((o) => {
       const ship = normalisePostcode(o?.shippingAddress?.zip);
       const bill = normalisePostcode(o?.billingAddress?.zip);
@@ -176,8 +176,12 @@ app.post("/order-lookup", async (req, res) => {
       items,
     });
   } catch (err) {
-    console.error("order-lookup error:", err);
-    return res.status(500).json({ ok: false, error: "Server error" });
+    console.error("order-lookup error:", err?.message || err);
+    // send the REAL message back to the browser so we can see it
+    return res.status(500).json({
+      ok: false,
+      error: err?.message || "Server error",
+    });
   }
 });
 
@@ -215,7 +219,7 @@ async function shopifyAdminFetch({ shop, token, version, query, variables }) {
     headers: {
       "X-Shopify-Access-Token": token,
       "Content-Type": "application/json",
-      Accept: "application/json",
+      "Accept": "application/json",
     },
     body: JSON.stringify({ query, variables }),
   });
@@ -223,13 +227,15 @@ async function shopifyAdminFetch({ shop, token, version, query, variables }) {
   if (!res.ok) {
     const txt = await res.text();
     console.error("Shopify Admin HTTP error", res.status, txt);
-    throw new Error("Shopify Admin API HTTP error");
+    // include the text so we can see if it's "missing scope" / "invalid token" / etc.
+    throw new Error(`Shopify HTTP ${res.status}: ${txt}`);
   }
 
   const json = await res.json();
   if (json.errors) {
     console.error("Shopify Admin GraphQL error", json.errors);
-    throw new Error("Shopify Admin API GraphQL error");
+    const first = json.errors[0];
+    throw new Error(first?.message || "Shopify GraphQL error");
   }
 
   return json.data;
