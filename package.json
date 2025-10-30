@@ -1,0 +1,15 @@
+{
+  "name": "help-hub-order-api",
+  "version": "1.0.0",
+  "description": "Order → products lookup for Shopify help hub",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2",
+    "cors": "^2.8.5"
+  }
+}
