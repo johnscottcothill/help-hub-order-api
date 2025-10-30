@@ -82,6 +82,8 @@ app.post("/order-lookup", async (req, res) => {
 
     const query = buildOrderSearchQuery(code);
 
+    // 👇 UPDATED: removed orderNumber from the query to avoid
+    // "Field 'orderNumber' doesn't exist on type 'Order'"
     const gql = `
       query FindOrder($q: String!) {
         orders(first: 5, query: $q, sortKey: CREATED_AT, reverse: true) {
@@ -89,7 +91,6 @@ app.post("/order-lookup", async (req, res) => {
             node {
               id
               name
-              orderNumber
               shippingAddress { zip }
               billingAddress  { zip }
               lineItems(first: 100) {
@@ -167,11 +168,13 @@ app.post("/order-lookup", async (req, res) => {
         .json({ ok: false, error: "No products found on that order." });
     }
 
+    // we removed orderNumber from the query, so return a safe shape
     return res.json({
       ok: true,
       order: {
         name: match.name,
-        orderNumber: match.orderNumber,
+        // try to derive a numeric-ish id from the name, otherwise null
+        orderNumber: deriveOrderNumberFromName(match.name),
       },
       items,
     });
@@ -210,6 +213,17 @@ function buildOrderSearchQuery(orderCode) {
 
 function escapeQuotes(s) {
   return s.replace(/"/g, '\\"');
+}
+
+// if your order name is something like "LS74193" we can still
+// expose a numeric-like field for the UI, but it's optional
+function deriveOrderNumberFromName(name) {
+  if (!name) return null;
+  // strip leading '#'
+  const clean = name.replace(/^#/, "");
+  // if it has digits, return just digits
+  const digits = clean.replace(/[^0-9]/g, "");
+  return digits || clean;
 }
 
 async function shopifyAdminFetch({ shop, token, version, query, variables }) {
