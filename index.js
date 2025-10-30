@@ -5,22 +5,38 @@ import fetch from "node-fetch";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ─── CONFIG (set in Heroku later) ─────────────────────────────
-const SHOP = process.env.SHOP;               // e.g. "your-shop.myshopify.com"
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN; // Admin API access token
+// ─── CONFIG from Heroku ──────────────────────────────────────────
+const SHOP = process.env.SHOP;               // e.g. "ledspace-lighting.myshopify.com"
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN; // Shopify Admin API token
 const ADMIN_VERSION = process.env.ADMIN_VERSION || "2024-10";
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || ""; // e.g. "https://yourshop.com"
-// ─────────────────────────────────────────────────────────────
+// You can put multiple origins in ALLOWED_ORIGIN separated by commas.
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
+// ─────────────────────────────────────────────────────────────────
+
+// turn "https://www.ledspace.co.uk,https://ledspace-lighting.myshopify.com"
+// into ["https://www.ledspace.co.uk", "https://ledspace-lighting.myshopify.com"]
+const allowedOrigins = ALLOWED_ORIGIN
+  ? ALLOWED_ORIGIN.split(",").map(o => o.trim().replace(/\/$/, "")) // trim + drop trailing slash
+  : [];
 
 app.use(express.json());
+
+// CORS middleware
 app.use(
   cors({
     origin: function (origin, cb) {
-      // allow same-origin / curl / Postman with no Origin
+      // If you didn't set ALLOWED_ORIGIN, allow everything (useful for testing)
       if (!ALLOWED_ORIGIN) return cb(null, true);
+
+      // Non-browser requests (curl, Postman) often have no Origin → allow
       if (!origin) return cb(null, true);
-      if (origin === ALLOWED_ORIGIN) return cb(null, true);
-      return cb(new Error("Not allowed by CORS"), false);
+
+      const cleanOrigin = origin.replace(/\/$/, ""); // strip trailing slash
+      if (allowedOrigins.includes(cleanOrigin)) {
+        return cb(null, true);
+      }
+
+      return cb(new Error("Not allowed by CORS: " + origin), false);
     },
   })
 );
@@ -38,9 +54,7 @@ app.post("/order-lookup", async (req, res) => {
     const pc = normalisePostcode(postcode || "");
 
     if (!code || !pc) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Missing orderCode or postcode" });
+      return res.status(400).json({ ok: false, error: "Missing orderCode or postcode" });
     }
 
     if (!SHOP || !ADMIN_TOKEN) {
@@ -50,6 +64,7 @@ app.post("/order-lookup", async (req, res) => {
       });
     }
 
+    // build Shopify query (we try name:"#123" and order_number:123)
     const query = buildOrderSearchQuery(code);
     const gql = `
       query FindOrder($q: String!) {
@@ -90,28 +105,29 @@ app.post("/order-lookup", async (req, res) => {
       variables: { q: query },
     });
 
-    const orders = data?.orders?.edges?.map((e) => e.node) || [];
-    const match = orders.find((o) => {
-      const z1 = normalisePostcode(o?.shippingAddress?.zip);
-      const z2 = normalisePostcode(o?.billingAddress?.zip);
-      return z1 === pc || z2 === pc;
+    const orders = data?.orders?.edges?.map(e => e.node) || [];
+
+    // match postcode (we normalise both sides: uppercase, no spaces)
+    const match = orders.find(o => {
+      const ship = normalisePostcode(o?.shippingAddress?.zip);
+      const bill = normalisePostcode(o?.billingAddress?.zip);
+      return ship === pc || bill === pc;
     });
 
     if (!match) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Order not found for that postcode." });
+      return res.status(404).json({ ok: false, error: "Order not found for that postcode." });
     }
 
-    // build product list
-    const productMap = new Map();
+    // dedupe products by handle
+    const byHandle = new Map();
     for (const edge of match.lineItems?.edges || []) {
       const li = edge.node || {};
       const v = li.variant || {};
       const p = v.product || {};
       if (!p?.handle) continue;
-      if (!productMap.has(p.handle)) {
-        productMap.set(p.handle, {
+
+      if (!byHandle.has(p.handle)) {
+        byHandle.set(p.handle, {
           title: p.title || li.title || p.handle,
           handle: p.handle,
           image: p.featuredImage?.url || "",
@@ -119,16 +135,14 @@ app.post("/order-lookup", async (req, res) => {
         });
       }
       if (v.sku) {
-        const item = productMap.get(p.handle);
+        const item = byHandle.get(p.handle);
         if (!item.skus.includes(v.sku)) item.skus.push(v.sku);
       }
     }
 
-    const items = Array.from(productMap.values());
+    const items = Array.from(byHandle.values());
     if (!items.length) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "No products found on that order." });
+      return res.status(404).json({ ok: false, error: "No products found on that order." });
     }
 
     return res.json({
@@ -149,7 +163,7 @@ app.listen(PORT, () => {
   console.log(`Help Hub Order API listening on port ${PORT}`);
 });
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
+// ─── helpers ─────────────────────────────────────────────────────
 function normalisePostcode(s) {
   return String(s || "").toUpperCase().replace(/\s+/g, "").trim();
 }
@@ -158,7 +172,10 @@ function buildOrderSearchQuery(orderCode) {
   const code = String(orderCode).trim();
   const hashCode = code.startsWith("#") ? code : `#${code}`;
   const maybeNum = code.replace(/[^0-9]/g, "");
-  const parts = [`name:"${escapeQuotes(code)}"`, `name:"${escapeQuotes(hashCode)}"`];
+  const parts = [
+    `name:"${escapeQuotes(code)}"`,
+    `name:"${escapeQuotes(hashCode)}"`,
+  ];
   if (maybeNum) {
     parts.push(`order_number:${maybeNum}`);
   }
@@ -176,20 +193,20 @@ async function shopifyAdminFetch({ shop, token, version, query, variables }) {
     headers: {
       "X-Shopify-Access-Token": token,
       "Content-Type": "application/json",
-      Accept: "application/json",
+      "Accept": "application/json",
     },
     body: JSON.stringify({ query, variables }),
   });
 
   if (!res.ok) {
-    const text = await res.text();
-    console.error("Shopify admin HTTP error:", res.status, text);
+    const txt = await res.text();
+    console.error("Shopify Admin HTTP error", res.status, txt);
     throw new Error("Shopify Admin API HTTP error");
   }
 
   const json = await res.json();
   if (json.errors) {
-    console.error("Shopify admin GraphQL error:", json.errors);
+    console.error("Shopify Admin GraphQL error", json.errors);
     throw new Error("Shopify Admin API GraphQL error");
   }
 
