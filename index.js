@@ -5,48 +5,62 @@ import fetch from "node-fetch";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ─── CONFIG from Heroku ──────────────────────────────────────────
-const SHOP = process.env.SHOP;               // e.g. "ledspace-lighting.myshopify.com"
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN; // Shopify Admin API token
+// ─── ENV (from Heroku) ─────────────────────────────────────────────
+const SHOP = process.env.SHOP; // e.g. "ledspace-lighting.myshopify.com"
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN; // shpat_...
 const ADMIN_VERSION = process.env.ADMIN_VERSION || "2024-10";
-// You can put multiple origins in ALLOWED_ORIGIN separated by commas.
+// ALLOWED_ORIGIN can be comma-separated, e.g.
+// "https://www.ledspace.co.uk,https://ledspace-lighting.myshopify.com"
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
-// ─────────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────────
 
-// turn "https://www.ledspace.co.uk,https://ledspace-lighting.myshopify.com"
-// into ["https://www.ledspace.co.uk", "https://ledspace-lighting.myshopify.com"]
+// turn "a,b,c " → ["a","b","c"]
 const allowedOrigins = ALLOWED_ORIGIN
-  ? ALLOWED_ORIGIN.split(",").map(o => o.trim().replace(/\/$/, "")) // trim + drop trailing slash
+  ? ALLOWED_ORIGIN.split(",").map((o) => o.trim().replace(/\/$/, ""))
   : [];
+
+// this is just so we can see in Heroku logs what the app thinks is OK
+console.log("Help Hub API starting…");
+console.log("SHOP:", SHOP);
+console.log("ADMIN_VERSION:", ADMIN_VERSION);
+console.log("Allowed origins:", allowedOrigins);
 
 app.use(express.json());
 
-// CORS middleware
+// CORS: allow any of the comma-separated origins, + non-browser requests
 app.use(
   cors({
     origin: function (origin, cb) {
-      // If you didn't set ALLOWED_ORIGIN, allow everything (useful for testing)
-      if (!ALLOWED_ORIGIN) return cb(null, true);
-
-      // Non-browser requests (curl, Postman) often have no Origin → allow
-      if (!origin) return cb(null, true);
-
-      const cleanOrigin = origin.replace(/\/$/, ""); // strip trailing slash
-      if (allowedOrigins.includes(cleanOrigin)) {
+      // If you didn't set ALLOWED_ORIGIN at all → allow everything (easier for local tests)
+      if (!ALLOWED_ORIGIN) {
+        console.log("CORS: no ALLOWED_ORIGIN set → allow all");
         return cb(null, true);
       }
 
+      // curl / Postman / server-to-server often have no Origin
+      if (!origin) {
+        console.log("CORS: no origin → allow");
+        return cb(null, true);
+      }
+
+      const cleanOrigin = origin.replace(/\/$/, "");
+      if (allowedOrigins.includes(cleanOrigin)) {
+        console.log("CORS: allowed:", cleanOrigin);
+        return cb(null, true);
+      }
+
+      console.log("CORS: BLOCKED:", origin, "not in", allowedOrigins);
       return cb(new Error("Not allowed by CORS: " + origin), false);
     },
   })
 );
 
-// health check
+// simple health check
 app.get("/", (req, res) => {
   res.json({ ok: true, msg: "Help Hub Order API is running" });
 });
 
-// main endpoint
+// main handler
 app.post("/order-lookup", async (req, res) => {
   try {
     const { orderCode, postcode } = req.body || {};
@@ -54,7 +68,9 @@ app.post("/order-lookup", async (req, res) => {
     const pc = normalisePostcode(postcode || "");
 
     if (!code || !pc) {
-      return res.status(400).json({ ok: false, error: "Missing orderCode or postcode" });
+      return res
+        .status(400)
+        .json({ ok: false, error: "Missing orderCode or postcode" });
     }
 
     if (!SHOP || !ADMIN_TOKEN) {
@@ -64,8 +80,8 @@ app.post("/order-lookup", async (req, res) => {
       });
     }
 
-    // build Shopify query (we try name:"#123" and order_number:123)
     const query = buildOrderSearchQuery(code);
+
     const gql = `
       query FindOrder($q: String!) {
         orders(first: 5, query: $q, sortKey: CREATED_AT, reverse: true) {
@@ -95,7 +111,8 @@ app.post("/order-lookup", async (req, res) => {
             }
           }
         }
-      }`;
+      }
+    `;
 
     const data = await shopifyAdminFetch({
       shop: SHOP,
@@ -105,17 +122,19 @@ app.post("/order-lookup", async (req, res) => {
       variables: { q: query },
     });
 
-    const orders = data?.orders?.edges?.map(e => e.node) || [];
+    const orders = data?.orders?.edges?.map((e) => e.node) || [];
 
-    // match postcode (we normalise both sides: uppercase, no spaces)
-    const match = orders.find(o => {
+    // find the order whose postcode matches (shipping OR billing)
+    const match = orders.find((o) => {
       const ship = normalisePostcode(o?.shippingAddress?.zip);
       const bill = normalisePostcode(o?.billingAddress?.zip);
       return ship === pc || bill === pc;
     });
 
     if (!match) {
-      return res.status(404).json({ ok: false, error: "Order not found for that postcode." });
+      return res
+        .status(404)
+        .json({ ok: false, error: "Order not found for that postcode." });
     }
 
     // dedupe products by handle
@@ -134,6 +153,7 @@ app.post("/order-lookup", async (req, res) => {
           skus: [],
         });
       }
+
       if (v.sku) {
         const item = byHandle.get(p.handle);
         if (!item.skus.includes(v.sku)) item.skus.push(v.sku);
@@ -142,7 +162,9 @@ app.post("/order-lookup", async (req, res) => {
 
     const items = Array.from(byHandle.values());
     if (!items.length) {
-      return res.status(404).json({ ok: false, error: "No products found on that order." });
+      return res
+        .status(404)
+        .json({ ok: false, error: "No products found on that order." });
     }
 
     return res.json({
@@ -160,7 +182,7 @@ app.post("/order-lookup", async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Help Hub Order API listening on port ${PORT}`);
+  console.log("Help Hub Order API listening on port " + PORT);
 });
 
 // ─── helpers ─────────────────────────────────────────────────────
@@ -193,7 +215,7 @@ async function shopifyAdminFetch({ shop, token, version, query, variables }) {
     headers: {
       "X-Shopify-Access-Token": token,
       "Content-Type": "application/json",
-      "Accept": "application/json",
+      Accept: "application/json",
     },
     body: JSON.stringify({ query, variables }),
   });
@@ -212,4 +234,3 @@ async function shopifyAdminFetch({ shop, token, version, query, variables }) {
 
   return json.data;
 }
- 
