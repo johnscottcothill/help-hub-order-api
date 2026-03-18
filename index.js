@@ -176,7 +176,8 @@ app.post('/order-lookup', async (req, res) => {
         title: p ? p.title : li.title,
         handle: p ? p.handle : null,
         image: (p && Array.isArray(p.images) && p.images.length) ? p.images[0].src : null,
-        skus: li.sku ? [li.sku] : []
+        skus: li.sku ? [li.sku] : [],
+		image_alt: (p && Array.isArray(p.images) && p.images.length) ? p.images[0].altText : null
       };
     });
 
