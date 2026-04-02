@@ -110,14 +110,17 @@ app.post('/order-lookup', async (req, res) => {
     for (const o of orders) {
       const shipPc = o.shipping_address ? normalisePostcode(o.shipping_address.zip) : '';
       const billPc = o.billing_address ? normalisePostcode(o.billing_address.zip) : '';
-      if (shipPc && shipPc === targetPc) {
-        order = o;
-        break;
-      }
-      if (billPc && billPc === targetPc) {
-        order = o;
-        break;
-      }
+        if (shipPc && shipPc === targetPc) {
+            order = o;
+            break;
+        }
+        else if (billPc && billPc === targetPc) {
+            order = o;
+            break;
+        }
+        else {
+            return res.status(400).json({ ok: false, error: 'No match found' });
+        }
     }
     if (!order) {
       order = orders[0];
