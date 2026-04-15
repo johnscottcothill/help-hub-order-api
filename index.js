@@ -72,6 +72,40 @@ async function shopifyAdminGet(path) {
   return resp.data;
 }
 
+// PUT version of the above
+async function shopifyAdminPut(path, payload) {
+  if (!SHOP || !ADMIN_TOKEN) {
+    throw new Error('SHOP or ADMIN_TOKEN not configured');
+  }
+  const url = `https://${SHOP}/admin/api/${ADMIN_VERSION}${path}`;
+  const resp = await axios.put(url, payload, {
+    headers: {
+      'X-Shopify-Access-Token': ADMIN_TOKEN,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    }
+  });
+  return resp.data;
+}
+
+// fn to get existing tags, add new tags. 
+// must do this to append as PUT will just overwrite
+async function addOrderTags(orderId, newTags) {
+  const order = await shopifyAdminGet(`/orders/${orderId}.json`);
+  const existingTags = order.order.tags
+    ? order.order.tags.split(',').map(t => t.trim())
+    : [];
+
+  const merged = [...new Set([...existingTags, ...newTags])];
+
+  return shopifyAdminPut(`/orders/${orderId}.json`, {
+    order: {
+      id: orderId,
+      tags: merged.join(', ')
+    }
+  });
+}
+
 // health
 app.get('/', (req, res) => {
   res.send('Help Hub Order API is up');
@@ -185,6 +219,16 @@ app.post('/order-lookup', async (req, res) => {
         qty: li.quantity ? li.quantity : 0 // return 0 if not found
       };
     });
+
+    // add tag to order to log access (post purchase)
+    try{ 
+        await addOrderTags(order.id, ["HH_Post_Sales"]);
+    }
+    catch(e){
+        console.error("tagging failed: ", e.message);
+    }
+
+
 
     return res.json({
       ok: true,
