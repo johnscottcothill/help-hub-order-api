@@ -247,6 +247,91 @@ app.post('/order-lookup', async (req, res) => {
   }
 });
 
+
+// Shopify admin supports partial SKU searches, so moved the 'sku-lookup' here
+app.get("/sku-search", async (req, res) => {
+  const q = (req.query.q || "").trim();
+
+  if (!q || q.length < 2) {
+    return res.json([]);
+  }
+
+  try {
+    // query
+    const queryString = `sku:${q}* OR sku:${q.toUpperCase()}*`;
+
+    const gql = `
+      query SkuLookup($query: String!) {
+        productVariants(first: 20, query: $query) {
+          edges {
+            node {
+              sku
+              image { url }
+              product {
+                handle
+                title
+                featuredImage { url }
+              }
+            }
+          }
+        }
+      }
+    `;
+    
+    const endpoint = `https://${SHOP}/admin/api/${ADMIN_VERSION}/graphql.json`;
+
+    const response = await axios.post(endpoint, {
+        query: gql,
+        variales: {query: q},{
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": ADMIN_TOKEN
+      }
+    });
+
+
+
+    const json = await response.json();
+
+    if (json.errors) {
+      console.error("Shopify error:", json.errors);
+      return res.status(500).json([]);
+    }
+
+    const edges = json?.data?.productVariants?.edges || [];
+
+    const results = [];
+    const seen = new Set();
+
+    for (const e of edges) {
+      const v = e.node;
+      if (!v) continue;
+
+      const product = v.product || {};
+      const handle = product.handle;
+
+      if (!handle || seen.has(handle)) continue;
+
+      seen.add(handle);
+
+      results.push({
+        title: product.title || v.sku || "Product",
+        url: `/products/${handle}`,
+        image: product.featuredImage?.url || v.image?.url || "",
+        sku: v.sku,
+        handle: handle
+      });
+    }
+
+    return res.json(results);
+
+  } catch (err) {
+    console.error("SKU search error:", err);
+    return res.status(500).json([]);
+  }
+});
+
+
 app.listen(PORT, () => {
   console.log('Help Hub Order API listening on port', PORT);
   console.log('SHOP:', SHOP);
