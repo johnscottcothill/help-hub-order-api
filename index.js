@@ -296,7 +296,7 @@ app.post("/sku-search", async (req, res) => {
 
 
     const result = await response.data;
-    console.log("feedback ", json.stringify(result));
+    console.log("feedback ", JSON.stringify(result));
 
     if (result.errors) {
       console.error("Shopify error:", result.errors);
