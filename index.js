@@ -249,8 +249,8 @@ app.post('/order-lookup', async (req, res) => {
 
 
 // Shopify admin supports partial SKU searches, so moved the 'sku-lookup' here
-app.get("/sku-search", async (req, res) => {
-  const q = (req.query.q || "").trim();
+app.post("/sku-search", async (req, res) => {
+  const { q } = req.body || {};
 
   if (!q || q.length < 2) {
     return res.json([]);
@@ -280,25 +280,30 @@ app.get("/sku-search", async (req, res) => {
     
     const endpoint = `https://${SHOP}/admin/api/${ADMIN_VERSION}/graphql.json`;
 
-    const response = await axios.post(endpoint, {
+    const response = await axios.post(
+        endpoint, 
+        {
         query: gql,
-        variales: {query: q},{
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": ADMIN_TOKEN
-      }
+        variables: {query: queryString},
+        },
+        {
+            headers: {
+                "Content-Type": "application/json",
+                "X-Shopify-Access-Token": ADMIN_TOKEN
+            }
     });
 
 
 
-    const json = await response.json();
+    const result = await response.data;
+    console.log("feedback ", json.stringify(result));
 
-    if (json.errors) {
-      console.error("Shopify error:", json.errors);
+    if (result.errors) {
+      console.error("Shopify error:", result.errors);
       return res.status(500).json([]);
     }
 
-    const edges = json?.data?.productVariants?.edges || [];
+    const edges = result?.data?.productVariants?.edges || [];
 
     const results = [];
     const seen = new Set();
@@ -326,7 +331,7 @@ app.get("/sku-search", async (req, res) => {
     return res.json(results);
 
   } catch (err) {
-    console.error("SKU search error:", err);
+    console.error(`SKU search error:`, err);
     return res.status(500).json([]);
   }
 });
