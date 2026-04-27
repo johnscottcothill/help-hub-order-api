@@ -262,7 +262,7 @@ app.post("/sku-search", async (req, res) => {
 
     const gql = `
       query SkuLookup($query: String!) {
-        productVariants(first: 20, query: $query) {
+        productVariants(first: 5, query: $query) {
           edges {
             node {
               sku
