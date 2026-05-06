@@ -202,8 +202,8 @@ app.post('/order-lookup', async (req, res) => {
         const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/385645937014.json`); // custom.ns_pack_bom_items 
         if (pdata && pdata.product) {
           productsById[pid] = pdata.product;
-          try {if(bomdata) productsById[pid].bom = bomdata;}
-          catch (err){console.log("Failed to add bom data: ", err);}
+          console.log("bomdata: ", bomdata);
+          if(bomdata) productsById[pid].bom = bomdata;
         }
       } catch (e) {
         console.warn('Could not load product', pid, e.message);
