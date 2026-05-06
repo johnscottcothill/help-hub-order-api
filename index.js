@@ -199,15 +199,16 @@ app.post('/order-lookup', async (req, res) => {
     for (const pid of productIds) {
       try {
         const pdata = await shopifyAdminGet(`/products/${pid}.json`);
-        const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/385645937014.json`); // custom.ns_pack_bom_items 
+        //const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/385645937014.json`); // custom.ns_pack_bom_items 
+        const bomdata = "no_bomdata";
         if (pdata?.product) {
-  console.log("bomdata:", bomdata);
+            console.log("bomdata:", bomdata);
 
-  productsById[pid] = {
-    ...pdata.product,
-    bom: bomdata ?? []
-  };
-}
+             productsById[pid] = {
+            ...pdata.product,
+            bom: bomdata ?? []
+         };
+        }
       } catch (e) {
         console.warn('Could not load product', pid, e.message);
       }
