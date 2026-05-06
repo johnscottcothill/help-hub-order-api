@@ -200,11 +200,14 @@ app.post('/order-lookup', async (req, res) => {
       try {
         const pdata = await shopifyAdminGet(`/products/${pid}.json`);
         const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/385645937014.json`); // custom.ns_pack_bom_items 
-        if (pdata && pdata.product) {
-          productsById[pid] = pdata.product;
-          console.log("bomdata: ", bomdata);
-          if(bomdata) productsById[pid].bom = bomdata;
-        }
+        if (pdata?.product) {
+  console.log("bomdata:", bomdata);
+
+  productsById[pid] = {
+    ...pdata.product,
+    bom: bomdata ?? []
+  };
+}
       } catch (e) {
         console.warn('Could not load product', pid, e.message);
       }
@@ -220,7 +223,7 @@ app.post('/order-lookup', async (req, res) => {
 		image_alt: (p && Array.isArray(p.images) && p.images.length) ? p.images[0].alt : 'alt text not found',
 		p_id: li.product_id,
         qty: li.quantity ? li.quantity : 0, // return 0 if not found,
-        bomItems: p.bomdata ? p.bomdata : null;
+        bomItems: p.bom ? p.bom : "";
       };
     });
 
