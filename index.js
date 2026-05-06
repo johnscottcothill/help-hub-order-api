@@ -200,7 +200,7 @@ app.post('/order-lookup', async (req, res) => {
       try {
         const pdata = await shopifyAdminGet(`/products/${pid}.json`);
         //const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/385645937014.json`); // custom.ns_pack_bom_items 
-        const bomdata = {"no_bomdata"};
+        const bomdata = "";
         if (pdata?.product) {
             console.log("bomdata:", bomdata);
 
