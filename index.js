@@ -199,7 +199,7 @@ app.post('/order-lookup', async (req, res) => {
     for (const pid of productIds) {
       try {
         const pdata = await shopifyAdminGet(`/products/${pid}.json`);
-        const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/93828789780854.json`); // custom.ns_pack_bom_items -- obtain this id via storefront query
+        //const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/93828789780854.json`); // custom.ns_pack_bom_items -- obtain this id via storefront query
         //const bomdata = "";
         if (pdata?.product) {
             console.log("bomdata:", bomdata);
@@ -223,8 +223,7 @@ app.post('/order-lookup', async (req, res) => {
         skus: li.sku ? [li.sku] : [],
 		image_alt: (p && Array.isArray(p.images) && p.images.length) ? p.images[0].alt : 'alt text not found',
 		p_id: li.product_id,
-        qty: li.quantity ? li.quantity : 0, // return 0 if not found,
-        bomItems: p.bom ? p.bom : ""
+        qty: li.quantity ? li.quantity : 0 // return 0 if not found,
       };
     });
 
