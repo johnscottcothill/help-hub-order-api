@@ -202,12 +202,9 @@ app.post('/order-lookup', async (req, res) => {
         //const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/93828789780854.json`); // custom.ns_pack_bom_items -- obtain this id via storefront query
         //const bomdata = "";
         if (pdata?.product) {
-            console.log("bomdata:", bomdata);
+            //console.log("bomdata:", bomdata);
 
-             productsById[pid] = {
-            ...pdata.product,
-            bom: bomdata ?? []
-         };
+             productsById[pid] = pdata.product;
         }
       } catch (e) {
         console.warn('Could not load product', pid, e.message);
