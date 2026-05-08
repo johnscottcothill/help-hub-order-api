@@ -199,7 +199,7 @@ app.post('/order-lookup', async (req, res) => {
     for (const pid of productIds) {
       try {
         const pdata = await shopifyAdminGet(`/products/${pid}.json`);
-        const bomdata = await shopifyAdminGet(`/2026-01/products/${pid}/metafields/93828789780854.json`); // custom.ns_pack_bom_items -- obtain this id via storefront query
+        const bomdata = await shopifyAdminGet(`/products/${pid}/metafields/93828789780854.json`); // custom.ns_pack_bom_items -- obtain this id via storefront query
         //const bomdata = "";
         if (pdata?.product) {
             console.log("bomdata:", bomdata);
